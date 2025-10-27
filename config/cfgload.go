@@ -11,18 +11,18 @@ import (
 )
 
 var (
-	config       = &Config{} // 初始化全局配置变量
+	config       = &Config{}
 	runtimeViper *viper.Viper
 )
 
-// Init 初始化配置模块
+// Init ��ʼ������ģ��
 func Init() {
 	runtimeViper = viper.New()
 	configPath := "./config.yaml"
 	runtimeViper.SetConfigFile(configPath)
 	runtimeViper.SetConfigType("yaml")
 
-	// 检查配置文件是否存在，如果不存在则创建默认配置文件
+	// ��������ļ��Ƿ���ڣ�����������򴴽�Ĭ�������ļ�
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if err := createDefaultConfig(configPath); err != nil {
 			fmt.Printf("config.Init: failed to create default config: %v", err)
@@ -32,14 +32,14 @@ func Init() {
 		os.Exit(0)
 	}
 
-	// 读取配置文件
+	// ��ȡ�����ļ�
 	if err := runtimeViper.ReadInConfig(); err != nil {
 		fmt.Printf("config.Init: config: read error: %v\n", err)
 		return
 	}
 	configMapping()
 
-	// 监听配置文件的变化
+	// ���������ļ��ı仯
 	runtimeViper.OnConfigChange(func(e fsnotify.Event) {
 		fmt.Printf("config: notice config changed: %v\n", e.String())
 		configMapping()
@@ -47,7 +47,7 @@ func Init() {
 	runtimeViper.WatchConfig()
 }
 
-// createDefaultConfig 创建默认的配置文件
+// createDefaultConfig ����Ĭ�ϵ������ļ�
 func createDefaultConfig(configPath string) error {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		return err
@@ -71,6 +71,7 @@ func createDefaultConfig(configPath string) error {
 		},
 		GeminiProxy: "http://127.0.0.1:7890",
 		MaxRounds:   20,
+		TestRuns:    3,
 		Timeout:     90 * time.Second,
 	}
 
@@ -80,12 +81,13 @@ func createDefaultConfig(configPath string) error {
 	v.Set("Gemini", defaultConfig.Gemini)
 	v.Set("GeminiProxy", defaultConfig.GeminiProxy)
 	v.Set("MaxRounds", defaultConfig.MaxRounds)
+	v.Set("TestRuns", defaultConfig.TestRuns)
 	v.Set("Timeout", defaultConfig.Timeout)
 
 	return v.WriteConfigAs(configPath)
 }
 
-// configMapping 将配置文件的内容映射到全局变量
+// configMapping �������ļ�������ӳ�䵽ȫ�ֱ���
 func configMapping() {
 	c := &Config{}
 	if err := runtimeViper.Unmarshal(c); err != nil {

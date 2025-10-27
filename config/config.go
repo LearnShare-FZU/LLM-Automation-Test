@@ -11,6 +11,7 @@ type Config struct {
 	Gemini      AIConfig
 	GeminiProxy string
 	MaxRounds   int
+	TestRuns    int
 	Timeout     time.Duration
 }
 
@@ -46,6 +47,9 @@ func CheckConfig(c *Config) error {
 	}
 	if c.MaxRounds <= 0 {
 		return fmt.Errorf("MaxRounds must be greater than 0")
+	}
+	if c.TestRuns <= 0 {
+		return fmt.Errorf("TestRuns must be greater than 0")
 	}
 	if c.Timeout <= 0 {
 		return fmt.Errorf("Timeout must be greater than 0")

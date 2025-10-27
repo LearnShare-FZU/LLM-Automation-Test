@@ -1,4 +1,4 @@
-// report/report.go - 测试执行与报告生成
+// report/report.go - 执行对话并产出报告
 package report
 
 import (
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -41,13 +42,11 @@ func Run(cfg *config.Config, modelName string, initialPrompt string) *TestResult
 	}
 
 	userInput := initialPrompt
-	fmt.Printf("👤 用户（初始）: %s\n", userInput)
+	fmt.Printf("👤 用户初始输入: %s\n", userInput)
 
 	messages := []targets.Message{{Role: "user", Content: userInput}}
 
 	for round := 1; round <= cfg.MaxRounds; round++ {
-
-		// 调用 Target AI（Qwen 或 DeepSeek）
 		var (
 			aiReply string
 			err     error
@@ -56,10 +55,12 @@ func Run(cfg *config.Config, modelName string, initialPrompt string) *TestResult
 			aiReply, err = targets.CallOpenAICompat(ctx, cfg.Qwen.APIKey, cfg.Qwen.BaseURL, modelName, messages, cfg)
 		} else if modelName == cfg.DeepSeek.Model {
 			aiReply, err = targets.CallOpenAICompat(ctx, cfg.DeepSeek.APIKey, cfg.DeepSeek.BaseURL, modelName, messages, cfg)
+		} else {
+			err = fmt.Errorf("未知模型: %s", modelName)
 		}
 
 		if err != nil {
-			fmt.Printf("❌ Target AI 调用失败: %v\n", err)
+			fmt.Printf("⚠️ Target AI 调用失败: %v\n", err)
 			break
 		}
 
@@ -70,7 +71,6 @@ func Run(cfg *config.Config, modelName string, initialPrompt string) *TestResult
 			AIReply:   aiReply,
 		})
 
-		// 构建对话历史供 Gemini 判断
 		var convHistory []map[string]string
 		for _, t := range result.Conversation {
 			convHistory = append(convHistory, map[string]string{
@@ -79,33 +79,30 @@ func Run(cfg *config.Config, modelName string, initialPrompt string) *TestResult
 			})
 		}
 
-		// ✅ 由 Gemini 判断是否结束
 		isComplete, reason, err := drivers.CheckIfDecisionComplete(ctx, convHistory, cfg)
 		if err != nil {
-			fmt.Printf("⚠️ Gemini 判断出错，继续对话: %v\n", err)
+			fmt.Printf("⚠️ Gemini 判定失败: %v\n", err)
 			os.Exit(-1)
 		} else if isComplete {
 			result.FinalRecommend = aiReply
 			result.Success = true
 			result.TotalRounds = round
 			result.GeminiJudgeLog = reason
-			fmt.Printf("✅ Gemini 判定完成（%s）\n", reason)
+			fmt.Printf("✅ Gemini 判断完成: %s\n", reason)
 			break
-		} else {
-			fmt.Printf("⏳ Gemini 判定未完成（%s）\n", reason)
 		}
 
-		// 生成下一轮用户提问
-		history := fmt.Sprintf("【用户】%s\n【AI】%s", userInput, aiReply)
+		fmt.Printf("ℹ️ Gemini 判断未完成: %s\n", reason)
+
+		history := fmt.Sprintf("用户: %s\nAI: %s", userInput, aiReply)
 		nextQ, err := drivers.GenerateNextUserQuestion(ctx, history, cfg)
 		if err != nil {
-			nextQ = "请给出最终推荐车型和理由。"
+			nextQ = "请继续提供更合适的推荐方式。"
 		}
 		userInput = nextQ
-		fmt.Printf("第 %d 轮开始...\n", round+1)
-		fmt.Printf("👤 用户（Gemini生成）: %s\n", userInput)
+		fmt.Printf("➡️ 开始第 %d 轮...\n", round+1)
+		fmt.Printf("👤 Gemini 生成用户问题: %s\n", userInput)
 
-		// 更新对话历史
 		messages = append(messages,
 			targets.Message{Role: "assistant", Content: aiReply},
 			targets.Message{Role: "user", Content: userInput},
@@ -121,46 +118,62 @@ func Run(cfg *config.Config, modelName string, initialPrompt string) *TestResult
 	return result
 }
 
-func SaveReport(modelName string, result *TestResult) {
-	filename := fmt.Sprintf("report_%s_%d.json", modelName, time.Now().Unix())
-	file, _ := os.Create(filename)
-	defer file.Close()
-	enc := json.NewEncoder(file)
-	enc.SetIndent("", "  ")
-	enc.Encode(result)
-	fmt.Printf("📄 报告已保存: %s\n", filename)
-}
+// SaveReport 保存原始 JSON 报告
+func SaveReport(outputDir, modelName string, runIndex int, result *TestResult) {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		fmt.Printf("⚠️ 无法创建报告目录: %v\n", err)
+		return
+	}
 
-// SaveMarkdownReport 保存对话历史为 Markdown 格式
-func SaveMarkdownReport(modelName string, result *TestResult) {
-	filename := fmt.Sprintf("report_%s_%d.md", modelName, time.Now().Unix())
+	filename := filepath.Join(outputDir, fmt.Sprintf("report_run%d_%d.json", runIndex, time.Now().UnixNano()))
 	file, err := os.Create(filename)
 	if err != nil {
-		fmt.Printf("⚠️ 无法创建 Markdown 报告: %v\n", err)
+		fmt.Printf("⚠️ 无法保存 JSON 报告: %v\n", err)
 		return
 	}
 	defer file.Close()
 
-	// 写入标题
-	fmt.Fprintf(file, "# 购车决策自动化评测报告\n\n")
-	fmt.Fprintf(file, "- **测试模型**: `%s`\n", result.ModelName)
-	fmt.Fprintf(file, "- **开始时间**: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(file, "- **结束时间**: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(file, "- **总轮数**: %d\n", result.TotalRounds)
-	fmt.Fprintf(file, "- **是否成功完成**: %v\n\n", result.Success)
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	enc.Encode(result)
+	fmt.Printf("✅ JSON 报告已保存: %s\n", filename)
+}
 
-	if result.Success {
-		fmt.Fprintf(file, "## ✅ 最终推荐\n\n")
-		fmt.Fprintf(file, "%s\n\n", result.FinalRecommend)
-		if result.GeminiJudgeLog != "" {
-			fmt.Fprintf(file, "> **Gemini 判断结束理由**: %s\n\n", result.GeminiJudgeLog)
-		}
-	} else {
-		fmt.Fprintf(file, "## ⚠️ 未完成决策\n\n")
-		fmt.Fprintf(file, "对话在 %d 轮后超时，未获得明确推荐。\n\n", result.TotalRounds)
+// SaveMarkdownReport 保存 Markdown 版对话记录
+func SaveMarkdownReport(outputDir, modelName string, runIndex int, result *TestResult) {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		fmt.Printf("⚠️ 无法创建报告目录: %v\n", err)
+		return
 	}
 
-	fmt.Fprintf(file, "## 💬 完整对话记录\n\n")
+	filename := filepath.Join(outputDir, fmt.Sprintf("report_run%d_%d.md", runIndex, time.Now().UnixNano()))
+	file, err := os.Create(filename)
+	if err != nil {
+		fmt.Printf("⚠️ 无法保存 Markdown 报告: %v\n", err)
+		return
+	}
+	defer file.Close()
+
+	fmt.Fprintf(file, "# 多轮对话测试报告\n\n")
+	fmt.Fprintf(file, "- **测试模型**: `%s`\n", result.ModelName)
+	fmt.Fprintf(file, "- **运行序号**: %d\n", runIndex)
+	fmt.Fprintf(file, "- **开始时间**: %s\n", result.StartTime.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(file, "- **结束时间**: %s\n", result.EndTime.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(file, "- **对话轮数**: %d\n", result.TotalRounds)
+	fmt.Fprintf(file, "- **是否成功**: %v\n\n", result.Success)
+
+	if result.Success {
+		fmt.Fprintf(file, "## 🎯 最终推荐\n\n")
+		fmt.Fprintf(file, "%s\n\n", result.FinalRecommend)
+		if result.GeminiJudgeLog != "" {
+			fmt.Fprintf(file, "> **Gemini 判定原因**: %s\n\n", result.GeminiJudgeLog)
+		}
+	} else {
+		fmt.Fprintf(file, "## ⚠️ 未完成推荐\n\n")
+		fmt.Fprintf(file, "对话达到 %d 轮后仍未完成推荐。\n\n", result.TotalRounds)
+	}
+
+	fmt.Fprintf(file, "## 💬 对话详情\n\n")
 
 	for _, turn := range result.Conversation {
 		fmt.Fprintf(file, "### 第 %d 轮\n\n", turn.Round)
@@ -169,5 +182,5 @@ func SaveMarkdownReport(modelName string, result *TestResult) {
 		fmt.Fprintf(file, "---\n\n")
 	}
 
-	fmt.Printf("📄 Markdown 报告已保存: %s\n", filename)
+	fmt.Printf("✅ Markdown 报告已保存: %s\n", filename)
 }
